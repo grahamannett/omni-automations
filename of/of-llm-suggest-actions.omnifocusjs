@@ -12,9 +12,12 @@
 }*/
 (() => {
 	/* DOCUMENTATION: https://platform.openai.com/docs/api-reference/introduction */
+	const COMPLETION_ROUTE = "/chat/completions"
+	const MODELS_ROUTE = "/models"
+	const SHOW_WARNING = false
 
-	var serviceTitle = "OpenAI";
-	var defaultServiceURLString = "https://api.openai.com/v1/chat/completions"
+	var serviceTitle = "LLMService" //  "OpenAI";
+	var defaultServiceURLString = "https://api.openai.com/v1" // "https://api.openai.com/v1/chat/completions"
 	var defaultModelID = "gpt-3.5-turbo"
 
 	var credentials = new Credentials()
@@ -113,17 +116,53 @@
 		}
 	}
 
-	const fetchData = async (credentialsObj, requestObj, serviceURLString) => {
+	const getModels = async (serviceURLString) => {
+		modelsRoute = serviceURLString + MODELS_ROUTE
+		if(shouldLog){console.log("# GETTING MODELS FROM:", modelsRoute)}
 		try {
+			request = URL.FetchRequest.fromString(modelsRoute)
+			request.method = 'GET'
+			request.cache = "no-cache"
+
+			response = await request.fetch()
+			// PROCESS REQUEST RESULT
+			responseCode = response.statusCode
+			if(shouldLog){console.log("# RESPONSE CODE:", responseCode)}
+			if (responseCode >= 200 && responseCode < 300){
+				// PROCESS RETRIEVED DATA
+				json = JSON.parse(response.bodyString)
+				console.log(JSON.stringify(json, null, 4))
+				modelID = json.data[0].id
+
+				modelParts = modelID.split("/") // match: (fullModelID.match(/\//g) || []).length;
+				if (modelParts.length > 2){
+					modelID = modelParts[0] + "/" + modelParts[1]
+				} else {
+					 modelID = fullModelID
+				}
+				return modelID
+			} else {
+				new Alert(String(responseCode), "An error occurred.").show()
+				console.error(JSON.stringify(response.bodyString))
+			}
+		}
+		catch(err){
+			new Alert(err.name, err.message).show()
+		}
+	}
+
+	const fetchData = async (credentialsObj, requestObj, serviceURLString, apiRoute) => {
+		try {
+			serviceURLRoute = serviceURLString + apiRoute
 			organizationID = credentialsObj["user"]
 			APIkey = credentialsObj["password"]
 			if(shouldLog){console.log("# ORGANIZATION-ID:", organizationID)}
 			if(shouldLog){console.log("# API-KEY:", APIkey)}
 
 			if(shouldLog){console.log("# CONSTRUCTING URL.FetchRequest()")}
-			if(shouldLog){console.log("# SERVICE URL STRING:", serviceURLString)}
+			if(shouldLog){console.log("# SERVICE URL STRING:", serviceURLRoute)}
 			if(shouldLog){console.log("# MODEL-ID:", requestObj.model)}
-			request = URL.FetchRequest.fromString(serviceURLString)
+			request = URL.FetchRequest.fromString(serviceURLRoute)
 			request.method = 'POST'
 			request.cache = "no-cache"
 
@@ -236,6 +275,12 @@
 						}
 					})
 				}
+			} else if (app.commandKeyDown) {
+				serviceURLString = preferences.readString("serviceURL")
+				modelID = await getModels(serviceURLString)
+				console.log("MODELS AVAILABLE:", modelID)
+				preferences.write("modelID", modelID)
+
 			} else if (app.optionKeyDown){
 					alertMessage = (shouldLog) ? "Logging is on." : "Logging is off."
 					alert = new Alert("Logging Status", alertMessage)
@@ -269,17 +314,19 @@
 					promptString += "\n"
 					promptString += "Project Description: " + projectNote
 
-					alertTitle = "Requesting Project Actions"
-					alertMessage = "IMPORTANT: Data about the selected project "
-					alertMessage += "will be sent to a third-party network service."
-					alert = new Alert(alertTitle, alertMessage)
-					alert.addOption("Proceed")
-					alert.addOption("Stop")
-					buttonIndex = await alert.show()
-					if(buttonIndex === 1){
-						throw {
-							name: "Cancel",
-							message: "User cancelled send."
+					if (SHOW_WARNING) {
+						alertTitle = "Requesting Project Actions"
+						alertMessage = "IMPORTANT: Data about the selected project "
+						alertMessage += "will be sent to a third-party network service."
+						alert = new Alert(alertTitle, alertMessage)
+						alert.addOption("Proceed")
+						alert.addOption("Stop")
+						buttonIndex = await alert.show()
+						if(buttonIndex === 1){
+							throw {
+								name: "Cancel",
+								message: "User cancelled send."
+							}
 						}
 					}
 
@@ -292,7 +339,7 @@
 					}
 
 					if(shouldLog){console.log("# PASSING CREDENTIALS AND REQUEST TO fetchData()")}
-					fetchData(credentialsObj, requestObj, serviceURLString)
+					fetchData(credentialsObj, requestObj, serviceURLString, COMPLETION_ROUTE)
 				} else {
 					if(shouldLog){console.log("# NO CREDENTIALS/API URL/MODEL ID RETRIEVED, REQUESTING CREDENTIALS.")}
 					requestCredentials()
