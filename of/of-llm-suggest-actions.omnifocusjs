@@ -1,0 +1,311 @@
+/*{
+	"type": "action",
+	"targets": ["omnifocus"],
+	"author": "Graham",
+	"identifier": "com.omni-automation.of.llm-suggest-actions",
+	"version": "1.0",
+	"description": "This plug-in will use the title and note of the selected project to ask the LLM GPT service for suggested actions, and provide the option to insert them into the selected project. In addition, the query results will be placed on the clipboard. NOTE: This plug-in uses the Credentials class to create and retrieve log-in pairs. To clear stored credentials, hold down Control modifier key when selecting plug-in from Automation menu. To set logging status, hold down the Option key when selecting plug-in from Automation menu.",
+	"label": "LLM: Suggest Actions",
+	"shortLabel": "LLM: Suggest Actions",
+	"paletteLabel": "LLM: Suggest Actions",
+	"image": "wand.and.stars"
+}*/
+(() => {
+	/* DOCUMENTATION: https://platform.openai.com/docs/api-reference/introduction */
+
+	var serviceTitle = "OpenAI";
+	var defaultServiceURLString = "https://api.openai.com/v1/chat/completions"
+	var defaultModelID = "gpt-3.5-turbo"
+
+	var credentials = new Credentials()
+	var preferences = new Preferences() // NO ID = PLUG-IN ID
+
+	var shouldLog
+
+	function createUtterance(textToSpeak){
+		AlexID = (
+			(app.platformName === "macOS") ?
+			"com.apple.speech.synthesis.voice.Alex" :
+			"com.apple.speech.voice.Alex"
+		)
+		voiceObj = Speech.Voice.withIdentifier(AlexID)
+		voiceRate = 0.4
+		utterance = new Speech.Utterance(textToSpeak)
+		utterance.voice = voiceObj
+		utterance.rate = voiceRate
+		return utterance
+	}
+
+	const requestCredentials = async () => {
+		try {
+			// CREATE FORM FOR GATHERING CREDENTIALS
+			inputForm = new Form()
+
+			// CREATE TEXT FIELDS
+			orgIDField = new Form.Field.String(
+				"organizationID",
+				"Org ID",
+				null
+			)
+
+			APIKeyField = new Form.Field.String(
+				"APIkey",
+				"API Key",
+				null
+			)
+
+			serviceURLField = new Form.Field.String(
+				"serviceURL",
+				"Service URL",
+				defaultServiceURLString
+			)
+
+			modelIDField = new Form.Field.String(
+				"modelID",
+				"Model ID",
+				defaultModelID
+			)
+
+			// ADD THE FIELDS TO THE FORM
+			inputForm.addField(orgIDField)
+			inputForm.addField(APIKeyField)
+			inputForm.addField(serviceURLField)
+			inputForm.addField(modelIDField)
+
+			// VALIDATE THE USER INPUT
+			inputForm.validate = formObject => {
+				organizationID = formObject.values["organizationID"]
+				orgIDStatus = (organizationID && organizationID.length > 0) ? true:false
+				APIkey = formObject.values["APIkey"]
+				APIKeyStatus = (APIkey && APIkey.length > 0) ? true:false
+				serviceURL = formObject.values["serviceURL"]
+				serviceURLStatus = (serviceURL && serviceURL.length > 0) ? true:false
+				modelID = formObject.values["modelID"]
+				modelIDStatus = (modelID && modelID.length > 0) ? true:false
+
+				validation = (orgIDStatus && APIKeyStatus && serviceURLStatus && modelIDStatus) ? true:false
+
+				return validation
+			}
+
+			// PRESENT THE FORM TO THE USER
+			formPrompt = "Enter OpenAI Organization ID and API Key (and optional API URL/model name):"
+			formObject = await inputForm.show(formPrompt, "Continue")
+
+			// RETRIEVE FORM VALUES
+			organizationID = formObject.values["organizationID"]
+			APIkey = formObject.values["APIkey"]
+			serviceURL = formObject.values["serviceURL"]
+			modelID = formObject.values["modelID"]
+
+			// STORE THE VALUES
+			credentials.write(serviceTitle, organizationID, APIkey)
+			preferences.write("serviceURL", serviceURL)
+			preferences.write("modelID", modelID)
+
+			if(shouldLog){console.log("# CREDENTIALS STORED IN SYSTEM KEYCHAIN")}
+			if(shouldLog){console.log("# LLM INFO STORED IN PREFERENCES")}
+		}
+		catch(err){
+			if(!err.causedByUserCancelling){
+				new Alert(err.name, err.message).show()
+			}
+		}
+	}
+
+	const fetchData = async (credentialsObj, requestObj, serviceURLString) => {
+		try {
+			organizationID = credentialsObj["user"]
+			APIkey = credentialsObj["password"]
+			if(shouldLog){console.log("# ORGANIZATION-ID:", organizationID)}
+			if(shouldLog){console.log("# API-KEY:", APIkey)}
+
+			if(shouldLog){console.log("# CONSTRUCTING URL.FetchRequest()")}
+			if(shouldLog){console.log("# SERVICE URL STRING:", serviceURLString)}
+			if(shouldLog){console.log("# MODEL-ID:", requestObj.model)}
+			request = URL.FetchRequest.fromString(serviceURLString)
+			request.method = 'POST'
+			request.cache = "no-cache"
+
+			if(shouldLog){console.log("# CONSTRUCTING REQUEST HEADERS")}
+			authorizationStr = "Bearer" + " " + APIkey
+			headerObj = {
+				"Content-Type": "application/json",
+				"Authorization": authorizationStr,
+				"OpenAI-Organization": organizationID
+			}
+			if(shouldLog){console.log("# HEADER OBJECT", JSON.stringify(headerObj, null, 4))}
+			request.headers = headerObj
+
+			if(shouldLog){console.log("# REQUEST OBJECT", JSON.stringify(requestObj, null, 4))}
+			request.bodyString = JSON.stringify(requestObj)
+
+			// EXECUTE REQUEST
+			response = await request.fetch()
+
+			// PROCESS REQUEST RESULT
+			responseCode = response.statusCode
+			if(shouldLog){console.log("# RESPONSE CODE:", responseCode)}
+			if (responseCode >= 200 && responseCode < 300){
+				// PROCESS RETRIEVED DATA
+				json = JSON.parse(response.bodyString)
+				console.log(JSON.stringify(json, null, 4))
+				alertTitle = "Successful Query"
+				alertMessage = "The response has been logged to the console, and placed on the clipboard."
+				alert = new Alert(alertTitle, alertMessage)
+				alert.addOption("Add Suggested Actions")
+				alert.addOption("Done")
+				alert.show(buttonIndex => {
+					responseStr = json.choices[0].message.content
+					Pasteboard.general.string = responseStr
+					if (buttonIndex === 0){
+
+						graphs = responseStr.split("\n")
+						listItems = new Array()
+						numbers = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
+						graphs.forEach(graph => {
+							firstChar = graph.charAt(0)
+							if(numbers.includes(firstChar)){
+								listItem = graph.replace(/^[0-9]+. /g, '')
+								listItems.push(listItem.trim())
+							}
+						})
+						project = document.windows[0].selection.projects[0]
+						listItems.forEach(item => {
+							new Task(item, project.ending)
+						})
+					}
+				})
+			} else if (responseCode === 401){
+/*
+{
+	"error":{
+		"message":"Incorrect API key provided: sk-D+4******************eGPd. You can find your API key at https://platform.openai.com/account/api-keys.",
+		"type":"invalid_request_error",
+		"param":null,
+		"code":"invalid_api_key"
+	}
+}
+*/
+				responseObj = JSON.parse(response.bodyString)
+				errObj = responseObj.error
+				errMessage = errObj.message
+				errCode = errObj.code
+				console.log(errCode, errMessage)
+				alert = new Alert(errCode, errMessage)
+				alert.show().then(() => {requestCredentials()})
+			} else {
+				new Alert(String(responseCode), "An error occurred.").show()
+				console.error(JSON.stringify(response.bodyString))
+			}
+		}
+		catch(err){
+			new Alert(err.name, err.message).show()
+		}
+	}
+
+	const action = new PlugIn.Action(async function(selection, sender){
+		try {
+			// READ PREFERENCES
+			booleanValue = preferences.readBoolean("shouldLog")
+			if(!booleanValue){
+				shouldLog = false
+				preferences.write("shouldLog", false)
+			}
+			if(shouldLog){console.clear()}
+			loggingMsg = (shouldLog) ? "# LOGGING IS ON":"# LOGGING IS OFF"
+			console.log(loggingMsg)
+
+			if (app.controlKeyDown){
+				// TO REMOVE CREDENTIALS HOLD DOWN CONTROL KEY WHEN SELECTING PLUG-IN
+				credentialsObj = credentials.read(serviceTitle)
+				if(!credentialsObj){
+					alertMessage = "There are no stored credentials to remove."
+					new Alert("Missing Resource", alertMessage).show()
+				} else {
+					alertMessage = "Remove the stored credentials?"
+					alert = new Alert("Confirmation Required", alertMessage)
+					alert.addOption("Reset")
+					alert.addOption("Cancel")
+					alert.show(buttonIndex => {
+						if (buttonIndex === 0){
+							console.log(`Removing Service “${serviceTitle}”`)
+							credentials.remove(serviceTitle)
+
+							console.log(`Service “${serviceTitle}” Removed`)
+						}
+					})
+				}
+			} else if (app.optionKeyDown){
+					alertMessage = (shouldLog) ? "Logging is on." : "Logging is off."
+					alert = new Alert("Logging Status", alertMessage)
+					alert.addOption("Turn On")
+					alert.addOption("Turn Off")
+					alert.show(buttonIndex => {
+						if (buttonIndex === 0){
+							preferences.write("shouldLog", true)
+							shouldLog = true
+						} else {
+							preferences.write("shouldLog", false)
+							shouldLog = false
+						}
+						loggingMsg = (shouldLog) ? "# LOGGING IS ON":"# LOGGING IS OFF"
+						console.log(loggingMsg)
+					})
+			} else {
+				credentialsObj = credentials.read(serviceTitle)
+				serviceURLString = preferences.readString("serviceURL")
+				modelIDString = preferences.readString("modelID")
+				if (credentialsObj && serviceURLString && modelIDString){
+
+					project = selection.projects[0]
+					projectTitle = project.name
+					projectNote = project.note
+
+					promptString = "Given the following project title and description, "
+					promptString += "what are the next steps?"
+					promptString += "\n"
+					promptString += "Project Title: " + projectTitle
+					promptString += "\n"
+					promptString += "Project Description: " + projectNote
+
+					alertTitle = "Requesting Project Actions"
+					alertMessage = "IMPORTANT: Data about the selected project "
+					alertMessage += "will be sent to a third-party network service."
+					alert = new Alert(alertTitle, alertMessage)
+					alert.addOption("Proceed")
+					alert.addOption("Stop")
+					buttonIndex = await alert.show()
+					if(buttonIndex === 1){
+						throw {
+							name: "Cancel",
+							message: "User cancelled send."
+						}
+					}
+
+					console.log("# PROMPT", promptString)
+					escapedText = encodeURIComponent(promptString)
+
+					requestObj = {
+						"model": modelIDString,
+						"messages": [{"role": "user", "content": escapedText}]
+					}
+
+					if(shouldLog){console.log("# PASSING CREDENTIALS AND REQUEST TO fetchData()")}
+					fetchData(credentialsObj, requestObj, serviceURLString)
+				} else {
+					if(shouldLog){console.log("# NO CREDENTIALS/API URL/MODEL ID RETRIEVED, REQUESTING CREDENTIALS.")}
+					requestCredentials()
+				}
+			}
+		}
+		catch(err){console.error(err.name, err.message)}
+	});
+
+	action.validate = function(selection, sender){
+		// validation code
+		return (selection.projects.length === 1)
+	};
+
+	return action;
+})();
